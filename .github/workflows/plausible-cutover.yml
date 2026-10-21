@@ -19,6 +19,10 @@ on:
         description: Type move-plausible-tunnel-connector to authorize moving the existing Tunnel connector.
         required: true
         type: string
+      confirm_script_cache_purge:
+        description: Type purge-plausible-script-cache-for-cutover to authorize up to six exact Worker-subrequest cache purges at the reviewed routing-proof boundaries.
+        required: true
+        type: string
       review_decision:
         description: Enter the independent review decision exactly as COMPLIANT / APPROVED / READY.
         required: true
@@ -45,6 +49,8 @@ env:
   PLAUSIBLE_BACKUP_BUCKET: ${{ vars.N8N_GCP_PROJECT_ID }}-n8n-backups
   PLAUSIBLE_HOSTNAME: ${{ vars.PLAUSIBLE_HOSTNAME || 'analytics.lobst3rs.com' }}
   PUBLIC_SCRIPT_URL: https://allanbpediniv.com/_analytics/js/script.js
+  SCRIPT_CACHE_URL: https://${{ vars.PLAUSIBLE_HOSTNAME || 'analytics.lobst3rs.com' }}/js/script.js
+  SCRIPT_CACHE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID_LOBST3RS }}
   REVIEWER_IDENTITY: ${{ inputs.reviewer_identity }}
 
 jobs:
@@ -55,6 +61,7 @@ jobs:
       inputs.confirm_runtime_secret_access == 'access-plausible-runtime-secrets' &&
       inputs.confirm_data_movement == 'move-verified-plausible-data' &&
       inputs.confirm_tunnel_transition == 'move-plausible-tunnel-connector' &&
+      inputs.confirm_script_cache_purge == 'purge-plausible-script-cache-for-cutover' &&
       inputs.review_decision == 'COMPLIANT / APPROVED / READY' &&
       inputs.reviewer_identity != ''
     runs-on: ubuntu-latest
@@ -173,6 +180,14 @@ jobs:
           gcloud secrets versions access latest --secret abpiv-plausible-backup-age-key --project "$GCP_PROJECT_ID" | \
             age-keygen -y - | grep -Eq '^age1'
 
+      - name: Prove the exact Worker subrequest cache purge before downtime
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash infra/analytics/compute/scripts/purge-script-cache.sh
+          curl --fail --silent --show-error --max-time 15 "$PUBLIC_SCRIPT_URL" >/dev/null
+
       - id: window
         name: Start the 60-minute production window
         run: echo "start_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -200,6 +215,11 @@ jobs:
         run: |
           gcloud compute ssh "$TARGET_VM" --project "$GCP_PROJECT_ID" --zone "$TARGET_ZONE" --tunnel-through-iap --quiet --command \
             "sudo /opt/abpiv-plausible/scripts/runtime-mode.sh maintenance"
+
+      - name: Purge the exact Worker subrequest cache after the connector transition
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash infra/analytics/compute/scripts/purge-script-cache.sh
 
       - name: Prove the public same-origin route is in maintenance
         timeout-minutes: 5
@@ -329,6 +349,11 @@ jobs:
           gcloud compute ssh "$TARGET_VM" --project "$GCP_PROJECT_ID" --zone "$TARGET_ZONE" --tunnel-through-iap --quiet --command \
             "sudo /opt/abpiv-plausible/scripts/runtime-mode.sh active"
 
+      - name: Purge the exact Worker subrequest cache before active verification
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: bash infra/analytics/compute/scripts/purge-script-cache.sh
+
       - name: Verify active public routing and Access without sending an event
         timeout-minutes: 5
         run: |
@@ -397,9 +422,12 @@ jobs:
 
       - name: Create and round-trip the first encrypted shared-host backup
         timeout-minutes: 15
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           gcloud compute ssh "$TARGET_VM" --project "$GCP_PROJECT_ID" --zone "$TARGET_ZONE" --tunnel-through-iap --quiet --command \
             "sudo /opt/abpiv-plausible/scripts/backup.sh"
+          bash infra/analytics/compute/scripts/purge-script-cache.sh
           curl --fail --silent --show-error --max-time 15 "$PUBLIC_SCRIPT_URL" >/dev/null
 
       - name: Stop the retained old VM only after all target checks pass
@@ -415,6 +443,8 @@ jobs:
       - name: Rollback plausible-analytics-vm from its intact old disk on any transition failure
         if: failure() && steps.transition.outputs.attempted == 'true' && steps.commit.outputs.committed != 'true'
         timeout-minutes: 20
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           target_isolated=false
@@ -436,6 +466,7 @@ jobs:
           fi
           gcloud compute ssh "$SOURCE_VM" --project "$GCP_PROJECT_ID" --zone "$SOURCE_ZONE" --tunnel-through-iap --quiet --command \
             "set -euo pipefail; sudo docker compose --project-directory /opt/plausible --file /opt/plausible/docker-compose.yml up --detach --wait; sudo systemctl start cloudflared.service; sudo systemctl is-active --quiet cloudflared.service"
+          bash infra/analytics/compute/scripts/purge-script-cache.sh
           consecutive=0
           for _ in $(seq 1 60); do
             status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$PUBLIC_SCRIPT_URL")"
@@ -456,6 +487,8 @@ jobs:
       - name: Recover the canonical target without reversing post-acceptance data
         if: failure() && steps.commit.outputs.committed == 'true'
         timeout-minutes: 20
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           target_status="$(gcloud compute instances describe "$TARGET_VM" --project "$GCP_PROJECT_ID" --zone "$TARGET_ZONE" --format='value(status)')"
@@ -464,6 +497,7 @@ jobs:
           fi
           gcloud compute ssh "$TARGET_VM" --project "$GCP_PROJECT_ID" --zone "$TARGET_ZONE" --tunnel-through-iap --quiet --command \
             "set -euo pipefail; until sudo test -f /var/lib/abpiv-n8n-bootstrap-complete && sudo systemctl is-active --quiet docker; do sleep 5; done; n8n_mode='${{ steps.resize_modes.outputs.n8n_mode }}'; if test -n \"\$n8n_mode\"; then case \"\$n8n_mode\" in active|maintenance) sudo /opt/abpiv-n8n/scripts/runtime-mode.sh \"\$n8n_mode\" ;; stopped) sudo /opt/abpiv-n8n/scripts/runtime-mode.sh stopped ;; *) exit 1 ;; esac; fi; sudo /opt/abpiv-plausible/scripts/runtime-mode.sh active"
+          bash infra/analytics/compute/scripts/purge-script-cache.sh
           curl --fail --silent --show-error --max-time 15 "$PUBLIC_SCRIPT_URL" >/dev/null
           echo "Post-acceptance failure left the verified target canonical; old-origin rollback was intentionally not attempted." >&2
           exit 1

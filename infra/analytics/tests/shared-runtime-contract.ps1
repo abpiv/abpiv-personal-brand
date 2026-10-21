@@ -58,6 +58,7 @@ $runtimeMode = Read-RepositoryFile "infra/analytics/compute/scripts/runtime-mode
 $prepareCutover = Read-RepositoryFile "infra/analytics/compute/scripts/prepare-cutover-runtime.sh"
 $verifyRestored = Read-RepositoryFile "infra/analytics/compute/scripts/verify-restored-runtime.sh"
 $waitForLocalRuntime = Read-RepositoryFile "infra/analytics/compute/scripts/wait-for-local-runtime.sh"
+$purgeScriptCache = Read-RepositoryFile "infra/analytics/compute/scripts/purge-script-cache.sh"
 $plausibleTunnelUnit = Read-RepositoryFile "infra/analytics/compute/systemd/abpiv-plausible-cloudflared.service"
 $activeNginx = Read-RepositoryFile "infra/analytics/compute/nginx/active.conf"
 $precommitNginx = Read-RepositoryFile "infra/analytics/compute/nginx/precommit.conf"
@@ -179,10 +180,27 @@ Assert-Match $restoreBackup 'plausible/daily/\*/plausible-backup\.tar\.age[\s\S]
 Assert-Match $cutover 'confirm_runtime_secret_access' "Plausible secret access needs a typed gate."
 Assert-Match $cutover 'confirm_data_movement' "Plausible data movement needs a typed gate."
 Assert-Match $cutover 'confirm_tunnel_transition' "Moving the existing Tunnel connector needs a typed gate."
+Assert-Match $cutover 'confirm_script_cache_purge:[\s\S]*description:\s*Type purge-plausible-script-cache-for-cutover to authorize up to six exact Worker-subrequest cache purges at the reviewed routing-proof boundaries\.[\s\S]*required:\s*true' "Purging the exact Worker subrequest cache at up to six routing-proof boundaries needs an accurately scoped typed gate."
 Assert-Match $cutover 'COMPLIANT / APPROVED / READY' "Plausible cutover needs independent rigorous approval."
 Assert-Match $cutover 'plausible-analytics-vm' "The workflow must operate the exact old Plausible VM."
 Assert-Match $cutover 'abpiv-runtime-vm' "The workflow must operate the exact new shared VM."
 Assert-Match $cutover 'name:\s*Quiesce the old Plausible origin[\s\S]*name:\s*Start the shared target in maintenance mode' "The old Tunnel connector and writer must stop before the target connector starts, preventing dual live connectors."
+Assert-Match $cutover 'SCRIPT_CACHE_URL:\s*https://\$\{\{ vars\.PLAUSIBLE_HOSTNAME \|\| ''analytics\.lobst3rs\.com'' \}\}/js/script\.js[\s\S]*SCRIPT_CACHE_ZONE_ID:\s*\$\{\{ vars\.CLOUDFLARE_ZONE_ID_LOBST3RS \}\}' "The cache purge must target the Worker fetch URL in the upstream lobst3rs.com zone, not the end-user URL."
+Assert-Match $cutover 'name:\s*Prove the exact Worker subrequest cache purge before downtime[\s\S]*name:\s*Start the 60-minute production window' "The exact Worker-subrequest cache purge permission and source refill must be proven before downtime starts."
+Assert-Match $cutover 'name:\s*Start the shared target in maintenance mode[\s\S]*name:\s*Purge the exact Worker subrequest cache after the connector transition[\s\S]*name:\s*Prove the public same-origin route is in maintenance' "The stale Worker-subrequest cache must be purged after the target connector starts and before its maintenance response is checked."
+Assert-Match $cutover 'name:\s*Open event writes only on the canonical target[\s\S]*name:\s*Purge the exact Worker subrequest cache before active verification[\s\S]*name:\s*Verify active public routing' "Active public verification must purge the precommit script cache after writes open."
+Assert-Match $cutover 'name:\s*Rollback plausible-analytics-vm[\s\S]*systemctl is-active --quiet cloudflared\.service[\s\S]*purge-script-cache\.sh[\s\S]*consecutive=0' "Precommit rollback must purge the target script cache after restoring the source connector and before public polling."
+Assert-Match $cutover 'name:\s*Recover the canonical target[\s\S]*runtime-mode\.sh active[\s\S]*purge-script-cache\.sh[\s\S]*curl --fail' "Postcommit recovery must purge stale script responses after restoring the target and before public verification."
+Assert-Match $cutover 'name:\s*Create and round-trip the first encrypted shared-host backup[\s\S]*backup\.sh[\s\S]*purge-script-cache\.sh[\s\S]*curl --fail' "Final backup acceptance must purge stale script responses before its public routing proof."
+if ([regex]::Matches($cutover, 'purge-script-cache\.sh').Count -ne 6) {
+    $failures.Add("Plausible cutover must invoke the exact cache-purge helper at all six routing-proof boundaries.")
+}
+if ([regex]::Matches($cutover, 'CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}').Count -ne 6) {
+    $failures.Add("The known-working Cloudflare API token must be exposed only at the six cache-purge boundaries.")
+}
+Assert-NotMatch $cutover '(?m)^  CLOUDFLARE_API_TOKEN:' "The Cloudflare API token must not be available at workflow scope."
+Assert-NotMatch $cutover 'CLOUDFLARE_ANALYTICS_API_TOKEN' "Plausible cutover must not use the historically failed analytics-specific token."
+Assert-Match $purgeScriptCache 'jq --null-input --compact-output --arg url "\$SCRIPT_CACHE_URL" ''\{files:\[\$url\]\}''[\s\S]*curl --fail --silent --show-error[\s\S]*api\.cloudflare\.com/client/v4/zones/\$SCRIPT_CACHE_ZONE_ID/purge_cache[\s\S]*Authorization: Bearer \$CLOUDFLARE_API_TOKEN[\s\S]*jq --exit-status ''\.success == true''' "The cache-purge helper must purge only the exact Worker subrequest URL and fail closed unless Cloudflare confirms success."
 Assert-Match $cutover '2700' "Plausible migration must roll back when it misses minute 45."
 Assert-Match $cutover 'rollback[\s\S]*plausible-analytics-vm' "Failure handling must restore the old Plausible origin."
 Assert-Match $cutover 'steps\.commit\.outputs\.committed != ''true''' "Old-origin rollback must close once the verified target becomes the canonical writer."
