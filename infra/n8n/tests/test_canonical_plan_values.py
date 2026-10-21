@@ -34,8 +34,10 @@ class CanonicalPlanValuesTests(unittest.TestCase):
         address: str,
         after: dict[str, object],
         *,
+        before: dict[str, object] | None = None,
         after_unknown: dict[str, object] | None = None,
         after_sensitive: dict[str, object] | None = None,
+        before_sensitive: dict[str, object] | None = None,
     ) -> dict[str, object]:
         return {
             "address": address,
@@ -45,10 +47,11 @@ class CanonicalPlanValuesTests(unittest.TestCase):
             "provider_name": "registry.opentofu.org/example/provider",
             "change": {
                 "actions": ["create"],
-                "before": None,
+                "before": before,
                 "after": after,
                 "after_unknown": after_unknown or {},
                 "after_sensitive": after_sensitive or {},
+                "before_sensitive": before_sensitive or {},
             },
         }
 
@@ -69,8 +72,8 @@ class CanonicalPlanValuesTests(unittest.TestCase):
             after_unknown={"id": True},
         )
         no_op = {
-            "address": "google_cloud_run_v2_service.n8n[0]",
-            "change": {"actions": ["no-op"], "after": {"name": "abpiv-n8n"}},
+            "address": "google_compute_network.n8n",
+            "change": {"actions": ["no-op"], "after": {"name": "abpiv-n8n-network"}},
         }
 
         payload, digest = self.canonicalize(
@@ -78,7 +81,7 @@ class CanonicalPlanValuesTests(unittest.TestCase):
         )
         document = json.loads(payload)
 
-        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["schema_version"], 2)
         self.assertEqual(
             [resource["address"] for resource in document["resource_changes"]],
             [
@@ -120,6 +123,67 @@ class CanonicalPlanValuesTests(unittest.TestCase):
             {"resource_changes": [unknown_changed, second, no_op]}
         )
         self.assertNotEqual(unknown_digest, digest)
+
+    def test_binds_redacted_before_state_and_transition_metadata(self) -> None:
+        transition = self.create_change(
+            "google_compute_instance.n8n",
+            {
+                "machine_type": "e2-standard-2",
+                "credentials": {"token": "new-secret-must-not-leak"},
+            },
+            before={
+                "machine_type": "e2-custom-medium-6144",
+                "credentials": {"token": "old-secret-must-not-leak"},
+            },
+            before_sensitive={"credentials": {"token": True}},
+            after_sensitive={"credentials": {"token": True}},
+        )
+        transition["change"]["actions"] = ["delete", "create"]
+        transition["change"]["replace_paths"] = [["machine_type"]]
+        transition["action_reason"] = "replace_because_cannot_update"
+
+        payload, digest = self.canonicalize({"resource_changes": [transition]})
+        document = json.loads(payload)
+        evidence = document["resource_changes"][0]
+        self.assertEqual(
+            evidence["before"]["machine_type"], "e2-custom-medium-6144"
+        )
+        self.assertEqual(
+            evidence["before"]["credentials"]["token"], {"sensitive": True}
+        )
+        self.assertNotIn(b"old-secret-must-not-leak", payload)
+        self.assertNotIn(b"new-secret-must-not-leak", payload)
+
+        before_changed = json.loads(json.dumps(transition))
+        before_changed["change"]["before"]["machine_type"] = "e2-standard-4"
+        _, before_changed_digest = self.canonicalize(
+            {"resource_changes": [before_changed]}
+        )
+        self.assertNotEqual(before_changed_digest, digest)
+
+        sensitive_before_changed = json.loads(json.dumps(transition))
+        sensitive_before_changed["change"]["before"]["credentials"][
+            "token"
+        ] = "rotated-old-secret"
+        sensitive_payload, sensitive_before_digest = self.canonicalize(
+            {"resource_changes": [sensitive_before_changed]}
+        )
+        self.assertEqual(sensitive_payload, payload)
+        self.assertEqual(sensitive_before_digest, digest)
+
+        reason_changed = json.loads(json.dumps(transition))
+        reason_changed["action_reason"] = "replace_by_request"
+        _, reason_changed_digest = self.canonicalize(
+            {"resource_changes": [reason_changed]}
+        )
+        self.assertNotEqual(reason_changed_digest, digest)
+
+        path_changed = json.loads(json.dumps(transition))
+        path_changed["change"]["replace_paths"] = [["boot_disk"]]
+        _, path_changed_digest = self.canonicalize(
+            {"resource_changes": [path_changed]}
+        )
+        self.assertNotEqual(path_changed_digest, digest)
 
 
 if __name__ == "__main__":

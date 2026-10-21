@@ -153,8 +153,8 @@ jobs:
           find infra/n8n/compute/scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           find infra/analytics/compute/scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           bash -n infra/analytics/tests/restore-rehearsal.sh
-          shellcheck infra/n8n/compute/scripts/*.sh infra/n8n/tools/*.sh infra/analytics/compute/scripts/*.sh infra/analytics/tests/restore-rehearsal.sh
-          python -m py_compile infra/n8n/tools/assert-plan-allowlist.py
+          shellcheck infra/n8n/compute/scripts/*.sh infra/analytics/compute/scripts/*.sh infra/analytics/tests/restore-rehearsal.sh
+          python -m py_compile infra/n8n/tools/canonical-plan-values.py
           python -m unittest discover -s infra/n8n/tests -p 'test_*.py'
           sudo install -d -m 0700 /run/n8n
           sudo install -m 0600 /dev/null /run/n8n/runtime.env

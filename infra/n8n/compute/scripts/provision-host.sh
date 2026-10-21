@@ -77,7 +77,7 @@ docker compose --project-directory /opt/abpiv-n8n --file /opt/abpiv-n8n/docker-c
 docker compose --project-directory /opt/abpiv-n8n --file /opt/abpiv-n8n/docker-compose.yml pull --quiet
 /opt/abpiv-n8n/scripts/restore-rehearsal.sh
 
-# Additive preparation must leave every production runtime container stopped.
+# Host provisioning must leave every production runtime container stopped.
 docker compose --project-directory /opt/abpiv-n8n --file /opt/abpiv-n8n/docker-compose.yml down --remove-orphans
 rm -f /run/n8n/runtime.env /run/n8n/postgres.env /run/n8n/postgres-password /run/n8n/encryption-key /run/cloudflared/token
 

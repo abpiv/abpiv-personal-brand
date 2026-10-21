@@ -1,13 +1,3 @@
-output "cloud_run_service_name" {
-  description = "Cloud Run service name for n8n."
-  value       = var.legacy_stack_enabled ? google_cloud_run_v2_service.n8n[0].name : null
-}
-
-output "cloud_run_service_uri" {
-  description = "Cloud Run service URI. Ingress is load-balancer-only; public traffic should use Cloudflare and the HTTPS load balancer."
-  value       = var.legacy_stack_enabled ? google_cloud_run_v2_service.n8n[0].uri : null
-}
-
 output "forms_hostname" {
   description = "Public n8n forms hostname."
   value       = var.forms_hostname
@@ -16,31 +6,6 @@ output "forms_hostname" {
 output "editor_hostname" {
   description = "Optional Cloudflare Access-protected n8n editor hostname."
   value       = local.editor_enabled ? var.editor_hostname : null
-}
-
-output "load_balancer_ip_address" {
-  description = "External IPv4 address for the n8n HTTPS load balancer."
-  value       = var.legacy_stack_enabled ? google_compute_global_address.n8n_lb[0].address : null
-}
-
-output "cloud_sql_instance_name" {
-  description = "Cloud SQL PostgreSQL instance name."
-  value       = var.legacy_stack_enabled ? google_sql_database_instance.n8n[0].name : null
-}
-
-output "cloud_sql_connection_name" {
-  description = "Cloud SQL instance connection name."
-  value       = var.legacy_stack_enabled ? google_sql_database_instance.n8n[0].connection_name : null
-}
-
-output "cloud_sql_private_ip_address" {
-  description = "Private IP address used by Cloud Run to reach Cloud SQL."
-  value       = var.legacy_stack_enabled ? google_sql_database_instance.n8n[0].private_ip_address : null
-}
-
-output "binary_data_bucket_name" {
-  description = "GCS bucket mounted into Cloud Run for n8n filesystem binary data."
-  value       = var.legacy_stack_enabled ? google_storage_bucket.binary_data[0].name : null
 }
 
 output "runtime_secret_ids" {
@@ -58,17 +23,6 @@ output "n8n_mcp_cf_access_client_secret" {
   description = "Cloudflare Access service-token client secret for non-browser n8n MCP access."
   value       = one(cloudflare_zero_trust_access_service_token.n8n_mcp[*].client_secret)
   sensitive   = true
-}
-
-output "certificate_dns_authorization_records" {
-  description = "DNS authorization CNAMEs for the Google-managed certificate. These are also managed in Cloudflare DNS."
-  value = {
-    for key, authorization in google_certificate_manager_dns_authorization.n8n : key => {
-      name = try(authorization.dns_resource_record[0].name, null)
-      type = try(authorization.dns_resource_record[0].type, null)
-      data = try(authorization.dns_resource_record[0].data, null)
-    }
-  }
 }
 
 output "github_deployer_service_account_email" {

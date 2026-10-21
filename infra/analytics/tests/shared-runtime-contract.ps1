@@ -43,8 +43,6 @@ $variables = Read-RepositoryFile "infra/n8n/opentofu/variables.tf"
 $compute = Read-RepositoryFile "infra/n8n/opentofu/compute.tf"
 $locals = Read-RepositoryFile "infra/n8n/opentofu/locals.tf"
 $iam = Read-RepositoryFile "infra/n8n/opentofu/iam.tf"
-$allowlist = Read-RepositoryFile "infra/n8n/tools/assert-plan-allowlist.py"
-$n8nCutover = Read-RepositoryFile ".github/workflows/n8n-cutover.yml"
 $compose = Read-RepositoryFile "infra/analytics/compute/docker-compose.yml"
 $provision = Read-RepositoryFile "infra/analytics/compute/scripts/provision-host.sh"
 $deployRelease = Read-RepositoryFile "infra/analytics/compute/scripts/deploy-release.sh"
@@ -69,8 +67,8 @@ $validateWorkflow = Read-RepositoryFile ".github/workflows/n8n-validate.yml"
 
 # The approved shared host starts at 1 sustained shared-core vCPU / 6 GiB and has a safe 2 vCPU / 8 GiB fallback.
 Assert-Match $variables 'variable\s+"compute_machine_type"[\s\S]*?default\s*=\s*"e2-custom-medium-6144"' "The shared runtime must default to e2-custom-medium-6144."
-Assert-Match $n8nCutover 'e2-custom-medium-6144\|e2-standard-2' "n8n cutover retries must accept only the approved shared-host sizes."
-Assert-Match $n8nCutover '--machine-type e2-standard-2' "The capacity fallback must resize to e2-standard-2."
+Assert-Match $cutover 'e2-custom-medium-6144\|e2-standard-2' "Shared-host resize recovery must accept only the approved sizes."
+Assert-Match $cutover '--machine-type e2-standard-2' "The capacity fallback must resize to e2-standard-2."
 Assert-NotMatch $rehearsal '-v /opt:/host-opt' "The Linux CI rehearsal must not stage its Compose runtime through a helper-container host bind."
 Assert-Match $rehearsal 'host_paths_owned=false[\s\S]*root_command[\s\S]*tar --extract[\s\S]*/opt/abpiv-plausible' "The rehearsal must track ownership and stage its runtime directly on the Linux host."
 Assert-NotMatch $rehearsal 'chmod 0400 /run/plausible/\*' "The rehearsal must not rely on an unprivileged shell expanding root-owned secret paths."
@@ -87,7 +85,6 @@ Assert-Match $variables 'variable\s+"plausible_data_disk_size_gb"[\s\S]*?default
 Assert-Match $compute 'resource\s+"google_compute_disk"\s+"plausible_data"' "The independent Plausible data disk is missing."
 Assert-Match $compute 'attached_disk[\s\S]*google_compute_disk\.plausible_data\.id' "The Plausible data disk must attach to abpiv-runtime-vm."
 Assert-Match $locals 'compute_plausible_data_disk_name\s*=\s*"abpiv-plausible-data"' "The Plausible disk must have a stable device name."
-Assert-Match $allowlist 'google_compute_disk\\\.plausible_data' "Additive-plan enforcement must allowlist the Plausible disk explicitly."
 
 # Secret metadata and access exist without secret versions or values in OpenTofu.
 Assert-Match $compute 'google_secret_manager_secret"\s+"plausible_runtime"' "Plausible runtime secret metadata is missing."

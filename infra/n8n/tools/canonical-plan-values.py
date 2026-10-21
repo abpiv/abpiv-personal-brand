@@ -48,21 +48,28 @@ def canonical_document(plan: dict[str, Any]) -> dict[str, Any]:
         actionable.append(
             {
                 "address": resource_change["address"],
+                "previous_address": resource_change.get("previous_address"),
+                "deposed": resource_change.get("deposed"),
                 "mode": resource_change.get("mode"),
                 "type": resource_change.get("type"),
                 "name": resource_change.get("name"),
                 "index": resource_change.get("index"),
                 "provider_name": resource_change.get("provider_name"),
+                "action_reason": resource_change.get("action_reason"),
                 "actions": actions,
+                "before": redact_sensitive(
+                    change.get("before"), change.get("before_sensitive", False)
+                ),
                 "after": redact_sensitive(
                     change.get("after"), change.get("after_sensitive", False)
                 ),
                 "after_unknown": change.get("after_unknown", {}),
+                "replace_paths": change.get("replace_paths", []),
             }
         )
 
     actionable.sort(key=lambda item: item["address"])
-    return {"schema_version": 1, "resource_changes": actionable}
+    return {"schema_version": 2, "resource_changes": actionable}
 
 
 def main() -> int:

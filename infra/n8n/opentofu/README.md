@@ -1,63 +1,48 @@
-# ABPIV n8n OpenTofu
+# ABPIV private n8n OpenTofu
 
-This root manages the current Cloud Run/Cloud SQL stack, the additive private Compute runtime, Cloudflare security, and the staged transition between them. State remains in the private `abpiv-personal-brand-opentofu-state` bucket under `infra/n8n`.
+This root models the steady-state private Compute runtime, shared-host resources, and n8n edge controls. State remains in the private `abpiv-personal-brand-opentofu-state` bucket under `infra/n8n`.
 
-## State model
+## Managed resources
 
-| Phase | Inputs | Permitted effect |
-| --- | --- | --- |
-| IAM bootstrap | `runtime_origin=cloud_run`, `legacy_stack_enabled=true`, exact target list | Record the 19 declared legacy singleton state-address moves without changing those live resources, enable only IAP, Logging, Monitoring, and OS Login APIs, and create only the Compute runtime service account, the exact missing deployer project roles, and the deployer's service-account-user bindings on the Compute and Plausible runtime identities. No VM, data, Tunnel, routing, or DNS action is permitted. |
-| Preparation | `runtime_origin=cloud_run`, `legacy_stack_enabled=true` | Create only the shared VM, independent n8n and Plausible data disks, NAT, n8n backup bucket and Tunnel, VM identity/IAM, Plausible secret metadata, and required APIs. |
-| Cutover | `runtime_origin=compute`, `legacy_stack_enabled=true` | Update only the forms and editor DNS records from the load-balancer IP to the Tunnel CNAME. |
-| Decommission arm | `runtime_origin=compute`, `legacy_stack_enabled=true`, `legacy_cloud_run_min_instances=0`, `legacy_destruction_armed=true` | Update only Cloud SQL's Terraform deletion-protection flag; this must be written to state before removal without restarting Cloud Run. |
-| Decommission resources | `runtime_origin=compute`, `legacy_stack_enabled=false`, `legacy_deployer_permissions_enabled=true`, `legacy_destruction_armed=false` after arming was applied | Delete only the exact reviewed legacy resource allowlist while retaining the six deployer roles needed for external absence checks and recovery. |
-| Decommission permissions | `runtime_origin=compute`, `legacy_stack_enabled=false`, `legacy_deployer_permissions_enabled=false`, `legacy_destruction_armed=false` after resource absence is proven | Remove only the six now-obsolete deployer roles, then prove full-root convergence while retaining the Compute path and Cloudflare security. |
-| Google-retention residue | `runtime_origin=compute`, `legacy_stack_enabled=false`, `legacy_deployer_permissions_enabled=false`, `legacy_private_service_connection_enabled=true`, `legacy_service_networking_permission_enabled=true` | While Google retains the deleted Cloud SQL producer subnet, keep only its private-services connection/range and the one role needed for their later deletion; remove the other five obsolete roles. |
-| Residual network finalization | First set `legacy_private_service_connection_enabled=false` while keeping `legacy_service_networking_permission_enabled=true`; only after external absence set the permission flag false | Delete only the connection and range, prove both absent, then delete only `roles/servicenetworking.networksAdmin` and prove full convergence. |
-
-The defaults select preparation. `migrations.tf` moves existing singleton state addresses to their conditional `[0]` addresses so the first preparation plan does not recreate the old stack. Apply those moves while `legacy_stack_enabled=true`.
-
-If Google retains the deleted Cloud SQL producer subnet, the residual workflow uses three narrower delete-only allowlists: the other five obsolete roles, the connection plus range, and finally the single service-networking role. Partial success always converges forward and never restores retired roles. Keep the two residual HCL resource blocks, their reference dependency, and the service-networking role source until final external absence and a full no-op plan are proven.
-
-`../tools/assert-plan-allowlist.py` must inspect the JSON form of every saved plan before apply. It rejects replacements, unexpected updates, unexpected creates, and unexpected destroys. For DNS, Cloud Run rollback, and Cloud SQL arming/protection, it also inspects before/after values and permits only the exact attributes and directions required by that phase. The IAM bootstrap, additive preparation, and decommission each use separate plan/apply dispatches. Bootstrap is target-only and binds apply to the reviewed commit, sorted action-manifest hash, sorted `previous_address -> address` state-move manifest hash, and the deterministic `../tools/canonical-plan-values.py` digest of resolved non-sensitive values plus unknown-value structure. Its non-IAM targets must equal the source addresses declared in `migrations.tf`, and the plan allowlist rejects any resource action on them. An action or move manifest may be empty during partial-apply recovery, but `../tools/assert-bootstrap-evidence.py` rejects a plan when both are empty. Preparation then proves the deployer already has every effective apply permission—including on the newly bootstrapped Compute identity—and binds its apply to the reviewed commit plus action and non-sensitive-value digests. Migration decommission binds the reviewed commit and action list plus the round-trip-verified migration prefix and checksum-manifest digest. Fresh-start decommission instead binds explicit abandonment authority and the exact action list without reading or preserving old data. Both delete objects only from the exact old binary bucket before applying the reviewed plan. Every legacy GCP resource explicitly depends on the deployer-role collection, and fresh-start apply separates resource deletion from obsolete-role removal so absence checks and Cloud SQL recovery retain their required permissions. A strict create-only recovery allowlist can restore only missing members of the six legacy grants after an interrupted permission phase.
-
-## Retained target resources
-
-- Existing VPC and subnet
-- Private `abpiv-runtime-vm`, Cloud Router/NAT, IAP-only SSH firewall, and independent non-auto-delete n8n and Plausible data disks
-- VM runtime service account with only Secret Manager, backup/legacy-object, logging, and monitoring access
+- Existing-project API enablement needed by the current private runtime
+- Dedicated VPC/subnet, Cloud Router/NAT, IAP-only SSH firewall, and private deletion-protected shared VM
+- Independent non-auto-delete n8n and Plausible data disks
+- Shared-host runtime identity, narrowed GitHub OIDC deployer roles, and exact service-account-user bindings
+- n8n and Plausible secret containers plus least-privilege VM access
 - Private versioned backup bucket with seven-day retention and lifecycle
-- Existing n8n secrets plus Plausible secret containers for the unchanged key, database password, existing Tunnel token, and backup age identity
-- Cloudflare Tunnel, WAF, rate limiting, Access application, and MCP service token
-- GitHub OIDC deployer and narrowed Compute-era roles
+- Logging metrics and monitoring alert policies
+- Cloudflare Tunnel, fixed proxied CNAMEs, forms WAF/rate limits, editor Access, and the MCP service token
 
-## Conditional legacy resources
+There is no alternate n8n origin selector and no source for the retired serverless service, managed database, private-service connection, connector, load balancer, certificates, binary-data bucket, old identities, or old permissions.
 
-- Cloud Run runtime and its obsolete runtime service account/IAM
-- Cloud SQL database and private-service connection/range
-- Serverless VPC connector and serverless NEG
-- HTTPS load balancer, forwarding rule/IP, Certificate Manager resources, and Cloudflare certificate-authorization records
-- Old GCS binary-data bucket
+Removing the five retired `google_project_service.required` addresses from this source does not disable those APIs because every service resource used `disable_on_destroy=false`. The first reviewed steady-state cleanup plan may therefore contain only those five state-removal actions. Disabling a project API is a separate project-wide decision and is intentionally outside this n8n cleanup because unrelated resources may use it.
 
-The VPC/subnet, Secret Manager values, new backup bucket, Cloudflare security controls, and GitHub OIDC identity are never part of the legacy destruction allowlist.
+## State and apply contract
+
+Live plans and applies use `n8n-apply.yml`; do not operate this backend from a local shell.
+
+1. Dispatch `mode=plan` from exact `main` with `confirm_plan=plan-private-n8n-infrastructure` and approve the protected `production-plan` gate.
+2. The workflow first verifies the private runtime and public editor/forms controls. It then publishes the redacted plan, sorted action list, canonical redacted prior and desired values plus transition metadata, exact commit, and a combined manifest SHA-256.
+3. Give the exact artifact, commit, and manifest digest to an independent rigorous reviewer. Require `COMPLIANT / APPROVED / READY` for that evidence.
+4. In a later dispatch on the same exact commit, use `mode=apply`, `confirm_apply=apply-reviewed-private-n8n-infrastructure`, the review decision and reviewer identity, the reviewed commit, and the reviewed manifest digest.
+5. Approve the protected `production` gate only after all inputs and the live state still match. The workflow regenerates the plan, reproduces the manifest, applies only the saved reviewed plan, proves a full-root no-op, and reverifies private/public health.
+
+An empty action list is valid plan evidence and hashes deterministically. Apply cannot proceed from plan evidence with a different commit, action set, resolved non-sensitive value, or unknown-value structure. Sensitive values are replaced by structural markers before hashing.
 
 ## Authentication and secrets
 
-Google uses Application Default Credentials locally or Workload Identity Federation in Actions. Cloudflare reads `CLOUDFLARE_API_TOKEN` from the environment. Never use service-account key files.
+Google uses Application Default Credentials locally for offline validation or repository-scoped Workload Identity Federation in Actions. Cloudflare reads `CLOUDFLARE_API_TOKEN` from the environment. Never use service-account key files.
 
-OpenTofu creates secret containers and IAM only. It does not contain runtime secret versions, output the Tunnel token, or persist secret values in plans or repository files. The Cloudflare Access client-secret output remains sensitive and is handled by the existing approved workflow path.
+OpenTofu creates secret containers and IAM only. It does not contain secret versions, output the Tunnel token, or persist secret values in source. The Cloudflare Access client-secret output is marked sensitive.
 
-The deployer receives `roles/iam.serviceAccountUser` on both the new shared VM identity and the existing `plausible-analytics-vm` identity so the reviewed cutover can use OS Login through IAP on the two exact hosts. This does not grant either runtime identity access to the other runtime's data.
-
-## Commands
-
-For offline structure and safety tests:
+## Offline checks
 
 ```bash
 tofu fmt -check -recursive infra/n8n/opentofu
+export TF_DATA_DIR="$(mktemp -d)"
 tofu -chdir=infra/n8n/opentofu init -backend=false -input=false
 tofu -chdir=infra/n8n/opentofu validate
 tofu -chdir=infra/n8n/opentofu test
 ```
 
-Live full-root plans and applies use the gated workflows because they bind all production variables, authenticate through OIDC, and enforce phase-specific action allowlists. Do not apply this root from a local shell.
+Provider downloads belong only in the external `TF_DATA_DIR`. A local validation must not contact the production backend, generate a live plan, or mutate infrastructure.

@@ -8,24 +8,13 @@ data "cloudflare_zones" "editor" {
   max_items = 1
 }
 
-resource "cloudflare_dns_record" "certificate_authorization" {
-  for_each = var.enable_cloudflare_edge && var.legacy_stack_enabled ? google_certificate_manager_dns_authorization.n8n : {}
-
-  zone_id = local.hostname_zone_ids[each.key]
-  name    = trimsuffix(each.value.dns_resource_record[0].name, ".")
-  content = trimsuffix(each.value.dns_resource_record[0].data, ".")
-  type    = each.value.dns_resource_record[0].type
-  ttl     = 60
-  proxied = false
-}
-
 resource "cloudflare_dns_record" "forms" {
   count = var.enable_cloudflare_edge ? 1 : 0
 
   zone_id = var.allanbpediniv_zone_id
   name    = var.forms_hostname
-  content = var.runtime_origin == "compute" ? "${cloudflare_zero_trust_tunnel_cloudflared.n8n[0].id}.cfargotunnel.com" : google_compute_global_address.n8n_lb[0].address
-  type    = var.runtime_origin == "compute" ? "CNAME" : "A"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.n8n[0].id}.cfargotunnel.com"
+  type    = "CNAME"
   ttl     = 1
   proxied = true
 }
@@ -35,8 +24,8 @@ resource "cloudflare_dns_record" "editor" {
 
   zone_id = local.editor_cloudflare_zone_id
   name    = var.editor_hostname
-  content = var.runtime_origin == "compute" ? "${cloudflare_zero_trust_tunnel_cloudflared.n8n[0].id}.cfargotunnel.com" : google_compute_global_address.n8n_lb[0].address
-  type    = var.runtime_origin == "compute" ? "CNAME" : "A"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.n8n[0].id}.cfargotunnel.com"
+  type    = "CNAME"
   ttl     = 1
   proxied = true
 }

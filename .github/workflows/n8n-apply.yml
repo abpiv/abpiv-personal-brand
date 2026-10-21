@@ -1,19 +1,19 @@
-name: Plan or apply private shared Compute preparation
+name: Plan or apply private n8n infrastructure
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Generate review evidence first; apply only in a later dispatch.
+        description: Generate evidence first; apply only in a later reviewed dispatch.
         required: true
         type: choice
         options: [plan, apply]
       confirm_plan:
-        description: In plan mode, type plan-private-shared-vm.
+        description: In plan mode, type plan-private-n8n-infrastructure.
         required: false
         type: string
       confirm_apply:
-        description: In apply mode, type prepare-private-shared-vm.
+        description: In apply mode, type apply-reviewed-private-n8n-infrastructure.
         required: false
         type: string
       review_decision:
@@ -21,19 +21,15 @@ on:
         required: false
         type: string
       reviewer_identity:
-        description: In apply mode, record the independent reviewer's GitHub handle or durable identity.
+        description: In apply mode, record the independent reviewer's durable identity.
         required: false
         type: string
       reviewed_commit_sha:
         description: In apply mode, enter the exact 40-character commit SHA from the reviewed plan dispatch.
         required: false
         type: string
-      reviewed_actions_sha256:
-        description: In apply mode, enter the action-manifest SHA-256 from the reviewed plan dispatch.
-        required: false
-        type: string
-      reviewed_plan_values_sha256:
-        description: In apply mode, enter the non-sensitive plan-values SHA-256 from the reviewed plan dispatch.
+      reviewed_manifest_sha256:
+        description: In apply mode, enter the exact manifest SHA-256 from the reviewed plan dispatch.
         required: false
         type: string
 
@@ -47,6 +43,9 @@ concurrency:
 
 env:
   TOFU_DIR: infra/n8n/opentofu
+  GCP_PROJECT_ID: ${{ vars.N8N_GCP_PROJECT_ID }}
+  GCP_ZONE: ${{ vars.N8N_GCP_ZONE || 'us-east1-c' }}
+  VM_NAME: abpiv-runtime-vm
   TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
   TF_VAR_cloudflare_access_auth_domain: ${{ vars.N8N_CLOUDFLARE_ACCESS_AUTH_DOMAIN || 'lobst3rs.cloudflareaccess.com' }}
   TF_VAR_cloudflare_access_organization_name: ${{ vars.N8N_CLOUDFLARE_ACCESS_ORGANIZATION_NAME || 'ABPIV Internal' }}
@@ -62,27 +61,24 @@ env:
   TF_VAR_editor_access_allowed_group_ids: ${{ vars.N8N_EDITOR_ACCESS_ALLOWED_GROUP_IDS || '[]' }}
   TF_VAR_manage_cloudflare_access_organization: ${{ vars.N8N_MANAGE_CLOUDFLARE_ACCESS_ORGANIZATION || 'false' }}
   TF_VAR_github_oidc_principal_set: ${{ vars.N8N_GITHUB_OIDC_PRINCIPAL_SET }}
-  TF_VAR_runtime_origin: cloud_run
-  TF_VAR_legacy_stack_enabled: "true"
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
 jobs:
-  prepare:
+  infrastructure:
     if: >-
       github.ref == 'refs/heads/main' &&
       (
-        (inputs.mode == 'plan' && inputs.confirm_plan == 'plan-private-shared-vm') ||
+        (inputs.mode == 'plan' && inputs.confirm_plan == 'plan-private-n8n-infrastructure') ||
         (
           inputs.mode == 'apply' &&
-          inputs.confirm_apply == 'prepare-private-shared-vm' &&
+          inputs.confirm_apply == 'apply-reviewed-private-n8n-infrastructure' &&
           inputs.review_decision == 'COMPLIANT / APPROVED / READY' &&
           inputs.reviewer_identity != '' &&
           inputs.reviewed_commit_sha != '' &&
-          inputs.reviewed_actions_sha256 != '' &&
-          inputs.reviewed_plan_values_sha256 != ''
+          inputs.reviewed_manifest_sha256 != ''
         )
       )
-    name: ${{ inputs.mode == 'apply' && 'Apply reviewed additive preparation' || 'Plan additive preparation' }}
+    name: ${{ inputs.mode == 'apply' && 'Apply reviewed private n8n infrastructure' || 'Plan private n8n infrastructure' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.mode == 'apply' && 'production' || 'production-plan' }}
     steps:
@@ -99,15 +95,14 @@ jobs:
 
       - name: Check required configuration
         env:
-          GCP_PROJECT: ${{ vars.N8N_GCP_PROJECT_ID }}
           GCP_SERVICE_ACCOUNT: ${{ vars.N8N_GCP_SERVICE_ACCOUNT }}
           WORKLOAD_IDENTITY_PROVIDER: ${{ vars.N8N_GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          CLOUDFLARE_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          FORMS_ZONE: ${{ vars.CLOUDFLARE_ZONE_ID_ALLANBPEDINIV }}
-          EDITOR_ZONE: ${{ vars.N8N_EDITOR_ZONE_ID || vars.CLOUDFLARE_ZONE_ID_LOBST3RS }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          FORMS_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID_ALLANBPEDINIV }}
+          EDITOR_ZONE_ID: ${{ vars.N8N_EDITOR_ZONE_ID || vars.CLOUDFLARE_ZONE_ID_LOBST3RS }}
         run: |
           set -euo pipefail
-          for name in GCP_PROJECT GCP_SERVICE_ACCOUNT WORKLOAD_IDENTITY_PROVIDER CLOUDFLARE_ACCOUNT FORMS_ZONE EDITOR_ZONE CLOUDFLARE_API_TOKEN; do
+          for name in GCP_PROJECT_ID GCP_SERVICE_ACCOUNT WORKLOAD_IDENTITY_PROVIDER CLOUDFLARE_ACCOUNT_ID FORMS_ZONE_ID EDITOR_ZONE_ID CLOUDFLARE_API_TOKEN; do
             test -n "${!name}" || { echo "::error::$name is required"; exit 1; }
           done
 
@@ -119,103 +114,44 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
       - uses: opentofu/setup-opentofu@v1
 
-      - name: Verify current deployer permissions before planning or applying
-        env:
-          GCP_PROJECT_ID: ${{ vars.N8N_GCP_PROJECT_ID }}
-          N8N_COMPUTE_RUNTIME_SERVICE_ACCOUNT: n8n-compute-runtime@${{ vars.N8N_GCP_PROJECT_ID }}.iam.gserviceaccount.com
+      - name: Verify the current private runtime and public controls
         run: |
           set -euo pipefail
-          access_token="$(gcloud auth print-access-token)"
-          missing=0
+          gcloud compute ssh "$VM_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --zone "$GCP_ZONE" \
+            --tunnel-through-iap \
+            --quiet \
+            --command "sudo /opt/abpiv-n8n/scripts/verify-runtime.sh"
+          editor_status="$(curl --silent --output /dev/null --write-out '%{http_code}' https://workflows.lobst3rs.com/)"
+          forms_status="$(curl --silent --output /dev/null --write-out '%{http_code}' https://forms.allanbpediniv.com/rest/settings)"
+          test "$editor_status" = "302"
+          test "$forms_status" = "403"
 
-          required_project_permissions=(
-            compute.disks.create
-            compute.disks.use
-            compute.firewalls.create
-            compute.instances.create
-            compute.instances.setLabels
-            compute.instances.setMetadata
-            compute.instances.setServiceAccount
-            compute.instances.setTags
-            compute.networks.updatePolicy
-            compute.routers.create
-            compute.routers.update
-            compute.subnetworks.use
-            iam.serviceAccounts.create
-            logging.logMetrics.create
-            monitoring.alertPolicies.create
-            resourcemanager.projects.getIamPolicy
-            resourcemanager.projects.setIamPolicy
-            secretmanager.secrets.create
-            serviceusage.services.enable
-            storage.buckets.create
-          )
-          project_request="$({ printf '%s\n' "${required_project_permissions[@]}"; } | jq --raw-input --slurp 'split("\n") | map(select(length > 0)) | {permissions: .}')"
-          project_response="$(curl --fail --silent --show-error \
-            --header "Authorization: Bearer ${access_token}" \
-            --header 'Content-Type: application/json' \
-            --data "$project_request" \
-            "https://cloudresourcemanager.googleapis.com/v1/projects/${GCP_PROJECT_ID}:testIamPermissions")"
-          for permission in "${required_project_permissions[@]}"; do
-            jq --exit-status --arg permission "$permission" '.permissions | index($permission) != null' \
-              <<<"$project_response" >/dev/null || {
-                echo "::error::The deployer does not already hold required permission $permission on project $GCP_PROJECT_ID."
-                missing=1
-              }
-          done
-
-          required_service_account_permissions=(
-            iam.serviceAccounts.actAs
-            iam.serviceAccounts.setIamPolicy
-          )
-          service_account_request="$({ printf '%s\n' "${required_service_account_permissions[@]}"; } | jq --raw-input --slurp 'split("\n") | map(select(length > 0)) | {permissions: .}')"
-          service_account_response="$(curl --fail --silent --show-error \
-            --header "Authorization: Bearer ${access_token}" \
-            --header 'Content-Type: application/json' \
-            --data "$service_account_request" \
-            "https://iam.googleapis.com/v1/projects/${GCP_PROJECT_ID}/serviceAccounts/${N8N_COMPUTE_RUNTIME_SERVICE_ACCOUNT}:testIamPermissions")"
-          unset access_token
-          for permission in "${required_service_account_permissions[@]}"; do
-            jq --exit-status --arg permission "$permission" '.permissions | index($permission) != null' \
-              <<<"$service_account_response" >/dev/null || {
-                echo "::error::The deployer does not already hold required permission $permission on the bootstrapped n8n Compute runtime service account."
-                missing=1
-              }
-          done
-          test "$missing" -eq 0
-          {
-            printf 'project=%s\n' "$GCP_PROJECT_ID"
-            printf 'project_permission=%s\n' "${required_project_permissions[@]}"
-            printf 'service_account=%s\n' "$N8N_COMPUTE_RUNTIME_SERVICE_ACCOUNT"
-            printf 'service_account_permission=%s\n' "${required_service_account_permissions[@]}"
-          } > preparation-permission-preflight.txt
-          printf 'Current deployer permission preflight passed.\n' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Generate the additive plan and exact action manifest
-        env:
-          DISPATCH_MODE: ${{ inputs.mode }}
+      - name: Generate exact plan and review manifest
         run: |
           set -euo pipefail
           tofu -chdir="$TOFU_DIR" init -input=false
-          tofu -chdir="$TOFU_DIR" plan -input=false -out=prepare.tfplan
-          tofu -chdir="$TOFU_DIR" show -json prepare.tfplan > prepare-plan.json
-          python infra/n8n/tools/assert-plan-allowlist.py prepare-plan.json --phase prepare
-          jq --raw-output '.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "\(.change.actions | join(",")) \(.address)"' prepare-plan.json \
-            | LC_ALL=C sort > preparation-actions.txt
-          test -s preparation-actions.txt
-          sha256sum preparation-actions.txt | tee preparation-actions.sha256
-          values_sha="$(python infra/n8n/tools/canonical-plan-values.py prepare-plan.json preparation-plan-values.json)"
-          printf '%s  preparation-plan-values.json\n' "$values_sha" | tee preparation-plan-values.sha256
-          tofu -chdir="$TOFU_DIR" show -no-color prepare.tfplan > preparation-plan.txt
-          manifest_sha="$(cut -d' ' -f1 preparation-actions.sha256)"
+          tofu -chdir="$TOFU_DIR" plan -input=false -out=infrastructure.tfplan
+          tofu -chdir="$TOFU_DIR" show -json infrastructure.tfplan > infrastructure-plan.json
+          tofu -chdir="$TOFU_DIR" show -no-color infrastructure.tfplan > infrastructure-plan.txt
+          jq --raw-output '.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "\(.address)\t\(.change.actions | join(","))"' infrastructure-plan.json \
+            | LC_ALL=C sort > infrastructure-actions.txt
+          values_sha="$(python infra/n8n/tools/canonical-plan-values.py infrastructure-plan.json infrastructure-plan-values.json)"
           {
-            printf '### Additive shared-runtime preparation plan\n\n'
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'plan-values-sha256=%s\n' "$values_sha"
+            printf '%s\n' 'actions:'
+            cat infrastructure-actions.txt
+          } > infrastructure-manifest.txt
+          sha256sum infrastructure-manifest.txt | tee infrastructure-manifest.sha256
+          manifest_sha="$(cut -d' ' -f1 infrastructure-manifest.sha256)"
+          {
+            printf '### Private n8n infrastructure plan\n\n'
             printf -- '- Commit: %s\n' "$GITHUB_SHA"
-            printf -- '- Action-manifest SHA-256: %s\n' "$manifest_sha"
-            printf -- '- Non-sensitive plan-values SHA-256: %s\n' "$values_sha"
-            printf -- '- Mode: %s\n\n' "$DISPATCH_MODE"
+            printf -- '- Manifest SHA-256: %s\n\n' "$manifest_sha"
             printf '```text\n'
-            cat preparation-actions.txt
+            cat infrastructure-manifest.txt
             printf '```\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -223,46 +159,64 @@ jobs:
         if: inputs.mode == 'plan'
         uses: actions/upload-artifact@v4
         with:
-          name: shared-runtime-preparation-plan-${{ github.sha }}
+          name: private-n8n-infrastructure-plan-${{ github.sha }}
           path: |
-            preparation-plan.txt
-            preparation-actions.txt
-            preparation-actions.sha256
-            preparation-plan-values.json
-            preparation-plan-values.sha256
-            preparation-permission-preflight.txt
+            infrastructure-plan.txt
+            infrastructure-plan-values.json
+            infrastructure-actions.txt
+            infrastructure-manifest.txt
+            infrastructure-manifest.sha256
           if-no-files-found: error
           retention-days: 7
 
-      - name: Match the independently reviewed action and value manifests
+      - name: Match the independently reviewed manifest
         if: inputs.mode == 'apply'
         env:
-          REVIEWED_ACTIONS_SHA256: ${{ inputs.reviewed_actions_sha256 }}
-          REVIEWED_PLAN_VALUES_SHA256: ${{ inputs.reviewed_plan_values_sha256 }}
+          REVIEWED_MANIFEST_SHA256: ${{ inputs.reviewed_manifest_sha256 }}
           REVIEWER_IDENTITY: ${{ inputs.reviewer_identity }}
         run: |
           set -euo pipefail
-          [[ "$REVIEWED_ACTIONS_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$REVIEWED_PLAN_VALUES_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          actual_actions_sha="$(cut -d' ' -f1 preparation-actions.sha256)"
-          actual_values_sha="$(cut -d' ' -f1 preparation-plan-values.sha256)"
-          test "$actual_actions_sha" = "$REVIEWED_ACTIONS_SHA256"
-          test "$actual_values_sha" = "$REVIEWED_PLAN_VALUES_SHA256"
-          printf 'Reviewed action and non-sensitive value manifests matched for reviewer %s.\n' "$REVIEWER_IDENTITY" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$REVIEWED_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          actual_manifest_sha="$(cut -d' ' -f1 infrastructure-manifest.sha256)"
+          test "$actual_manifest_sha" = "$REVIEWED_MANIFEST_SHA256"
+          printf 'Reviewed manifest matched for reviewer %s.\n' "$REVIEWER_IDENTITY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply only the freshly regenerated reviewed plan
         if: inputs.mode == 'apply'
-        run: tofu -chdir="$TOFU_DIR" apply -input=false -auto-approve prepare.tfplan
+        run: tofu -chdir="$TOFU_DIR" apply -input=false -auto-approve infrastructure.tfplan
 
-      - name: Show non-sensitive preparation outputs
+      - name: Prove full-root convergence
         if: inputs.mode == 'apply'
         run: |
-          tofu -chdir="$TOFU_DIR" output compute_instance_name
-          tofu -chdir="$TOFU_DIR" output compute_instance_zone
-          tofu -chdir="$TOFU_DIR" output backup_bucket_name
-          tofu -chdir="$TOFU_DIR" output plausible_data_disk_name
-          tofu -chdir="$TOFU_DIR" output cloudflare_tunnel_id
+          set -euo pipefail
+          set +e
+          tofu -chdir="$TOFU_DIR" plan -input=false -detailed-exitcode -no-color
+          plan_status=$?
+          set -e
+          test "$plan_status" -eq 0
+
+      - name: Reverify the private runtime and public controls
+        if: inputs.mode == 'apply'
+        run: |
+          set -euo pipefail
+          gcloud compute ssh "$VM_NAME" \
+            --project "$GCP_PROJECT_ID" \
+            --zone "$GCP_ZONE" \
+            --tunnel-through-iap \
+            --quiet \
+            --command "sudo /opt/abpiv-n8n/scripts/verify-runtime.sh"
+          editor_status="$(curl --silent --output /dev/null --write-out '%{http_code}' https://workflows.lobst3rs.com/)"
+          forms_status="$(curl --silent --output /dev/null --write-out '%{http_code}' https://forms.allanbpediniv.com/rest/settings)"
+          test "$editor_status" = "302"
+          test "$forms_status" = "403"
 
       - name: Remove plan material from the runner
         if: always()
-        run: rm -f prepare.tfplan prepare-plan.json preparation-plan.txt preparation-actions.txt preparation-actions.sha256 preparation-plan-values.json preparation-plan-values.sha256 preparation-permission-preflight.txt
+        run: |
+          rm -f "$TOFU_DIR/infrastructure.tfplan" \
+            infrastructure-plan.json \
+            infrastructure-plan.txt \
+            infrastructure-plan-values.json \
+            infrastructure-actions.txt \
+            infrastructure-manifest.txt \
+            infrastructure-manifest.sha256

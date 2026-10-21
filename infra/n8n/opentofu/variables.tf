@@ -5,7 +5,7 @@ variable "gcp_project_id" {
 }
 
 variable "gcp_region" {
-  description = "Google Cloud region for Cloud Run, Cloud SQL, networking, and the binary-data bucket."
+  description = "Google Cloud region for the private shared runtime network, NAT, and backup bucket."
   type        = string
   default     = "us-east1"
 }
@@ -14,58 +14,6 @@ variable "gcp_zone" {
   description = "Google Cloud zone for the private Compute Engine VM shared by the isolated n8n and Plausible projects."
   type        = string
   default     = "us-east1-c"
-}
-
-variable "runtime_origin" {
-  description = "Active production origin. Keep cloud_run during additive preparation; switch to compute only in the approved cutover window."
-  type        = string
-  default     = "cloud_run"
-
-  validation {
-    condition     = contains(["cloud_run", "compute"], var.runtime_origin)
-    error_message = "runtime_origin must be cloud_run or compute."
-  }
-}
-
-variable "legacy_stack_enabled" {
-  description = "Retains the rollback Cloud Run, Cloud SQL, connector, load balancer, and legacy bucket. Disable only after verified cutover and explicit destructive approval."
-  type        = bool
-  default     = true
-}
-
-variable "legacy_deployer_permissions_enabled" {
-  description = "Retains the five broad deployer roles needed by the legacy Cloud Run, SQL, load-balancer, certificate, and VPC-access stack. Disable only after those resources are proven absent."
-  type        = bool
-  default     = true
-}
-
-variable "legacy_private_service_connection_enabled" {
-  description = "Temporarily retains only the legacy private-services connection and its reserved range while Google finishes deleting Cloud SQL producer resources. Keep false outside the reviewed residual-cleanup workflow."
-  type        = bool
-  default     = false
-}
-
-variable "legacy_service_networking_permission_enabled" {
-  description = "Temporarily retains the service-networking deployer role until the residual private-services connection and reserved range are externally proven absent. Keep false outside the reviewed residual-cleanup workflow."
-  type        = bool
-  default     = false
-}
-
-variable "legacy_destruction_armed" {
-  description = "Writes Cloud SQL deletion_protection=false into state before the separately planned legacy deletion. Keep false outside an explicitly approved decommission."
-  type        = bool
-  default     = false
-}
-
-variable "legacy_cloud_run_min_instances" {
-  description = "Minimum legacy Cloud Run instances. Keep one before cutover, zero while retained only for rollback after a successful cutover."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = contains([0, 1], var.legacy_cloud_run_min_instances)
-    error_message = "legacy_cloud_run_min_instances must be 0 or 1."
-  }
 }
 
 variable "compute_machine_type" {
@@ -258,64 +206,6 @@ variable "editor_mcp_service_token_duration" {
 
 variable "github_oidc_principal_set" {
   description = "Optional Workload Identity principalSet member allowed to impersonate the n8n GitHub deployer service account."
-  type        = string
-  default     = ""
-}
-
-variable "n8n_image" {
-  description = "Cloud Run-compatible n8n container image. docker.io/n8nio/n8n:stable is the same manifest as docker.n8n.io/n8nio/n8n:stable."
-  type        = string
-  default     = "docker.io/n8nio/n8n:stable"
-
-  validation {
-    condition     = length(split("/", var.n8n_image)) >= 3
-    error_message = "n8n_image must include a registry host and repository path, for example docker.io/n8nio/n8n:stable."
-  }
-}
-
-variable "postgres_version" {
-  description = "Cloud SQL PostgreSQL engine version."
-  type        = string
-  default     = "POSTGRES_16"
-}
-
-variable "postgres_database" {
-  description = "PostgreSQL database used by n8n."
-  type        = string
-  default     = "n8n"
-}
-
-variable "postgres_user" {
-  description = "PostgreSQL user used by n8n. Create this user out of band and mirror its password into Secret Manager."
-  type        = string
-  default     = "n8n"
-}
-
-variable "cloud_sql_tier" {
-  description = "Cloud SQL machine tier for the n8n PostgreSQL instance."
-  type        = string
-  default     = "db-g1-small"
-}
-
-variable "cloud_sql_disk_size_gb" {
-  description = "Initial Cloud SQL disk size in GiB. Autoresize remains enabled."
-  type        = number
-  default     = 20
-
-  validation {
-    condition     = var.cloud_sql_disk_size_gb >= 10
-    error_message = "cloud_sql_disk_size_gb must be at least 10."
-  }
-}
-
-variable "cloud_sql_deletion_protection" {
-  description = "Whether Cloud SQL deletion protection is enabled."
-  type        = bool
-  default     = true
-}
-
-variable "binary_data_bucket_name" {
-  description = "Optional explicit GCS bucket name for n8n filesystem binary data."
   type        = string
   default     = ""
 }

@@ -1,117 +1,67 @@
-# Private Compute runtime
+# Private n8n runtime operations
 
-This directory defines the host-managed n8n runtime used after the approved cutover. It runs PostgreSQL 16, n8n, and Nginx in Docker on `abpiv-runtime-vm`; Cloudflare Tunnel is the only application ingress path. The VM has no public IP, Nginx binds only to `127.0.0.1:8080`, and neither n8n nor PostgreSQL publishes a host port. Nginx joins both the internal application network and a dedicated standard bridge: Docker requires the latter to activate loopback port publication, but the explicit `127.0.0.1` binding keeps it host-only.
+This directory is the release payload for production n8n on `abpiv-runtime-vm`. PostgreSQL, n8n, and Nginx run in an isolated Docker Compose project. Cloudflare Tunnel is the only application ingress path; the VM has no public IP, Nginx binds only to `127.0.0.1:8080`, and neither n8n nor PostgreSQL publishes a host port.
 
-## Safety states
+## Durable and ephemeral state
 
-The OpenTofu defaults are deliberately rollback-safe:
+The attached `abpiv-n8n-data` disk is mounted fail-closed at `/srv/n8n` and contains:
 
-| State | `runtime_origin` | `legacy_stack_enabled` | legacy Cloud Run minimum | Effect |
-| --- | --- | --- | --- | --- |
-| Additive preparation | `cloud_run` | `true` | `1` | Creates the private VM path while production DNS and all rollback resources remain unchanged. |
-| Cutover | `compute` | `true` | `1`, then quiesced out of band to `0` | Changes only the two proxied hostname records to the Tunnel. The old stack remains available for rollback. |
-| Decommission | `compute` | `false` | `0` while arming | Deletes only the reviewed legacy allowlist after verified migration and explicit destructive approval. |
+- `postgres/` for PostgreSQL data;
+- `state/` for n8n application state;
+- `binary/` for filesystem binary data;
+- `backups/` for temporary daily-backup staging; and
+- `migration/` for recoverable pre-restore snapshots.
 
-OpenTofu rejects `runtime_origin=cloud_run` when the legacy stack is disabled. The plan allowlist in `../tools/assert-plan-allowlist.py` rejects unlisted creates, changes, replacements, and deletes for every phase.
+Secrets are never stored on that disk. The VM identity loads them from Secret Manager into `/run/n8n` and `/run/cloudflared`, which are root-only tmpfs paths. Compose mounts the minimum required files read-only. The n8n entrypoint copies its two inputs into the container's private tmpfs under the unprivileged runtime identity before starting n8n.
 
-## Approval sequence
+## Runtime modes
 
-Never collapse these gates:
+`scripts/runtime-mode.sh` accepts only:
 
-1. Publish the reviewed topic branch through the repository's preview flow.
-2. After separate live-planning approval, dispatch `n8n-iam-bootstrap.yml` in `plan` mode with `plan-preparation-iam-bootstrap`. Preserve its permission evidence, redacted plan, exact commit SHA, sorted action manifest and SHA-256, sorted state-address-move manifest and SHA-256, and canonical non-sensitive plan-values file and SHA-256; this dispatch cannot apply infrastructure.
-3. Give the IAM-bootstrap evidence to the independent rigorous reviewer. Require `COMPLIANT / APPROVED / READY` for the exact commit plus all three manifest digests. The move manifest must exactly equal the 19 `migrations.tf` mappings, and every moved legacy resource must remain a no-op before requesting bootstrap apply approval.
-4. Only after explicit IAM-bootstrap approval, dispatch `n8n-iam-bootstrap.yml` in `apply` mode with `apply-preparation-iam-bootstrap`, the review decision and identity, reviewed commit SHA, reviewed action-manifest SHA-256, reviewed state-move-manifest SHA-256, and reviewed non-sensitive plan-values SHA-256. It regenerates and matches the target-only plan before recording only those state moves, enabling only IAP, Logging, Monitoring, and OS Login APIs, and creating only the reviewed identity and IAM resources. When the current workflow identity is a temporary bootstrap identity, keep it selected through this apply; only then set `N8N_GCP_SERVICE_ACCOUNT` to the dedicated `n8n-github-deployer@...` identity. Restore the prior variable immediately if the next authentication check fails.
-5. Dispatch `n8n-apply.yml` in `plan` mode with `plan-private-shared-vm`. The workflow must authenticate as the dedicated deployer and prove it now has every required GCP permission, including act-as and IAM-policy access on the new Compute runtime identity. Preserve the redacted plan evidence, permission-preflight evidence, exact commit SHA, sorted action manifest and SHA-256, and canonical non-sensitive plan-values file and SHA-256; this dispatch cannot apply infrastructure.
-6. Give the additive-preparation evidence to the independent rigorous reviewer. Require `COMPLIANT / APPROVED / READY` for the exact commit plus both manifest digests before requesting additive-preparation approval.
-7. Only after explicit additive-preparation approval, dispatch `n8n-apply.yml` in `apply` mode with `prepare-private-shared-vm`, the review decision and identity, reviewed commit SHA, reviewed action-manifest SHA-256, and reviewed non-sensitive plan-values SHA-256. The workflow repeats the permission preflight, regenerates the live plan, rejects any non-create drift, matches the commit and both manifests, and applies only that saved plan.
-8. Separately approve the purpose-limited Tunnel-token lifecycle and host provisioning. Dispatch `n8n-redeploy.yml` with `provision`, `provision-private-n8n-vm`, and `store-tunnel-token`. The workflow reads the non-secret Tunnel ID from OpenTofu state; the token moves directly from Cloudflare API memory to Secret Manager through a mode-0600 temporary file, which is deleted by a trap.
-9. Complete the independent rigorous review in `CUTOVER-REVIEW.md`. Continue only with `COMPLIANT / APPROVED / READY` and explicit cutover approval.
-10. Provision the Plausible release in stopped mode, then run its separately gated cutover only after review. Its workflow proves the old PostgreSQL counts, ClickHouse counts, and application-state checksums match the target and leaves the intact old VM stopped for rollback.
-11. Dispatch `n8n-cutover.yml` during the approved maintenance window with separate typed confirmations for runtime-secret access, data movement, and the two DNS changes, plus an existing `/form/...` path for a read-only public check. Before source backup or quiescence, it requires exactly one Cloud Run revision to serve all traffic, proves that revision's resolved digest matches the pinned n8n target image, and confirms that image is present on the private VM. It then creates an on-demand Cloud SQL backup, serves maintenance through the Tunnel, quiesces Cloud Run, exports and checksums the source, restores locally, compares every public-table count, proves stored-credential decryption without retaining plaintext, activates n8n, verifies public path controls and Access redirection, and observes the complete shared VM for at least 15 minutes.
-12. Allan must then complete n8n login and read-only MCP initialization/tool-inventory checks without submitting a form or running a workflow. Only after those checks pass may `n8n-decommission.yml` run in `plan` mode. The workflow downloads every required object from the newest exact migration prefix, verifies that the checksum manifest names only the required package, and round-trip checks the complete PostgreSQL/binary package before planning. Give the exact commit, retained migration prefix and manifest digest, destruction action manifest, and SHA-256 to the same reviewer.
-13. Only after that reviewer reconfirms the exact commit and manifest and explicit destruction approval is recorded, dispatch `n8n-decommission.yml` in `apply` mode with the reviewed commit SHA, reviewed manifest SHA-256, and `destroy-reviewed-legacy-n8n`. The workflow repeats the complete retained-package verification, matches the reviewed commit and regenerated manifest, writes Cloud SQL's deletion-protection flag to false in state, regenerates the full destruction plan, proves its action list is identical to the reviewed deletion list, and only then removes the old bucket objects and applies deletion.
+- `active`: PostgreSQL, n8n, Nginx, Tunnel, backup timer, and health timer are active; `/healthz` returns `active-ready`.
+- `maintenance`: PostgreSQL, Nginx, and Tunnel remain available while n8n is stopped; `/healthz` returns `maintenance-ready`.
+- `stopped`: the Compose project and Tunnel are stopped and tmpfs secret files are removed.
 
-Repository publication, IAM bootstrap, preparation, runtime secret access, source data movement, DNS cutover, and destruction remain separate approvals.
+The selected mode is persisted in `/etc/abpiv-n8n/mode`. The systemd service delegates boot recovery to `start-on-boot.sh`, which refuses unknown values and restores only the persisted mode.
 
-### Fresh-start destruction
+## Release deployment
 
-The migration-package gates above do not apply when Allan explicitly chose a fresh empty runtime and authorized abandonment without inspection, export, or backup of the legacy Cloud SQL and binary data. After Allan completes owner, credential, workflow, and endpoint acceptance, manually disable the retained Cloud Run service at zero instances and use `n8n-fresh-decommission.yml` instead of the migration-oriented decommission workflow.
+Dispatch `n8n-redeploy.yml` from exact `main` with:
 
-Dispatch `plan` first with `fresh-runtime-manual-acceptance-passed`, `fresh-start-abandoned-data-authorized`, and the independent reviewer identity. The plan must prove the private runtime is active, all three containers are healthy, Cloud Run is manually disabled at zero or already absent during an explicit partial-decommission retry, public Access/WAF behavior is unchanged, Cloud SQL arming is narrow, and the full deletion plan matches the strict legacy allowlist without any old-data read or backup. Give the exact commit, destruction manifest, and SHA-256 to an independent rigorous reviewer. Only after `COMPLIANT / APPROVED / READY` and a separate `production-destruction` approval may a later exact-commit/hash-bound `apply` dispatch use `destroy-abandoned-fresh-start-legacy-n8n`. Apply deletes and externally verifies the legacy resources while the six required deployer grants remain, then removes exactly those obsolete grants and verifies full convergence.
+- `action=deploy`;
+- `confirm_action=deploy-private-n8n-runtime`; and
+- `confirm_runtime_secret_access=access-n8n-runtime-secrets`.
 
-Cloud SQL can report its instance deleted while Google retains the producer-side private-services subnet for four days. If that blocks connection deletion, use `n8n-fresh-residual-cleanup.yml` rather than retrying the broad destruction. Its `prune-obsolete-permissions` phase requires the connection and range to exist and deletes only the five roles no longer needed. After the producer resource is released, its `finalize-private-network` phase permits only forward-convergent zero-or-one survivors, deletes the connection and range while retaining `roles/servicenetworking.networksAdmin`, externally proves both resources absent, and then removes that final role. Each mode requires its own reviewed plan/hash and live production approval. The residual source remains until the final external and no-op checks succeed.
+The protected `production` gate must be approved. The workflow uploads the exact `compute/` tree over IAP and executes the newly uploaded `deploy-release.sh`, not the previously installed copy. The script validates Compose, pulls pinned images, installs reviewed systemd units, reloads systemd, and restores the pre-deployment runtime mode. Temporary release artifacts are removed in an `always()` step.
 
-## Runtime operations
+Use `action=provision` only to rebuild the approved host from the existing OpenTofu resources. It requires `provision-private-n8n-vm` and `store-tunnel-token`, stores the Tunnel token without logging or retaining it, installs the host controls, rehearses PostgreSQL restore, and leaves the production containers stopped.
 
-The data disk mounts by UUID at `/srv/n8n` and holds:
+## Health and monitoring
 
-- `postgres/`: PostgreSQL data directory
-- `state/`: n8n state
-- `binary/`: n8n filesystem binary data
-- `backups/`: temporary daily backup staging
-- `migration/`: cutover packages and the pre-restore local rollback archive
+All three containers must report Docker health `healthy`:
 
-The expected UUID is persisted in `/etc/abpiv-n8n/data-disk.uuid`. Runtime startup, backup, restore, migration, and observation fail closed unless that exact filesystem is mounted; they never fall back to similarly named directories on the boot disk.
+- PostgreSQL uses `pg_isready` against the n8n database.
+- n8n uses the pinned image's Node runtime to fetch its local `/healthz/readiness` endpoint and fails on transport or non-success status.
+- Nginx probes its loopback `/healthz` route with the editor Host header.
 
-The deployed release is under `/opt/abpiv-n8n`. Runtime secrets exist only in the VM's `/run` tmpfs:
+`verify-runtime.sh` checks all three health signals, disk identity, secret non-persistence in Docker metadata, local forms/editor controls, Tunnel activity, and credential decryption without printing plaintext. `monitor-runtime.sh` records restart counters, alerts on missing or unhealthy containers, checks proxied readiness latency, and reports an inactive Tunnel. `observe-runtime.sh` adds bounded CPU, memory, swap, OOM, latency, and shared Plausible checks for an operator-selected interval.
 
-- `/run/n8n/runtime.env`: the unchanged n8n encryption key and PostgreSQL password, retained only in host tmpfs and never passed to Docker as an `env_file`
-- `/run/n8n/postgres.env`: a compatibility copy retained only in host tmpfs and never passed to Docker
-- `/run/n8n/postgres-password`: a root-only transient copy bind-mounted read-only for PostgreSQL `_FILE` loading and source export
-- `/run/n8n/encryption-key`: a root-only transient copy used by n8n's `_FILE` loader
-- `/run/cloudflared/token`: the Tunnel token
+## Backup and restore
 
-These files are root-owned mode `0600`, regenerated from Secret Manager, removed in stopped mode, and never written into Git, OpenTofu inputs, command output, Docker container metadata, or durable host configuration. The n8n wrapper copies only process-readable values into container tmpfs. Its generated `/home/node/.n8n/config` is redirected through a symlink to that tmpfs, so the encryption key is not stored on the data disk or included in backups.
+The daily timer runs at 06:30 America/New_York. `backup.sh` changes Nginx to maintenance, stops n8n, creates a PostgreSQL custom dump plus n8n-state and binary-data archives, writes and checks `SHA256SUMS`, restores active service, uploads the package to the private versioned backup bucket, downloads it to a temporary directory, and verifies the checksum manifest again.
 
-Docker startup installs a persistent `DOCKER-USER` drop rule for `169.254.169.254`, and every active or maintenance transition verifies it. Containers therefore cannot use the shared VM metadata endpoint to obtain the host service-account token or cross the n8n/Plausible secret and backup boundaries.
+`restore-backup.sh` requires:
 
-Host mode commands are:
-
-```bash
-sudo /opt/abpiv-n8n/scripts/runtime-mode.sh maintenance
-sudo /opt/abpiv-n8n/scripts/runtime-mode.sh active
-sudo /opt/abpiv-n8n/scripts/runtime-mode.sh stopped
+```text
+CONFIRM_RESTORE=restore-daily-abpiv-n8n
 ```
 
-Preparation always ends in `stopped`. Active mode enables restart-at-boot and the daily backup timer. On reboot, systemd reads `/etc/abpiv-n8n/mode` and restores that exact state, so a restore left in maintenance cannot become active implicitly. A normal release deployment preserves the current mode.
+It accepts only a fully downloaded package, verifies checksums and archive paths, enters maintenance, takes a local pre-restore snapshot, replaces PostgreSQL/state/binary data, and deliberately leaves n8n stopped pending manual acceptance. Restoration is a production data mutation and requires separate owner authority; the infrastructure and release workflows do not dispatch it.
 
-The Google Cloud Ops Agent publishes host memory and swap metrics. OpenTofu alert policies cover sustained CPU, memory, and swap thresholds. A one-minute host timer fails and emits a log-based alert event for any missing or unhealthy runtime container, and also reports kernel OOM or increased Docker restart counts; it never resizes automatically because resize remains approval-gated.
+## Host safety
 
-## Backup and recovery
-
-`backup.sh` acquires the shared data-operation lock, serves maintenance, stops n8n, creates a PostgreSQL custom-format dump plus n8n state and binary-data archives, and then resumes n8n before uploading. It verifies the SHA-256 manifest both locally and after a round-trip download. Restore and migration use the same lock. The private GCS bucket has public-access prevention, uniform access, object versioning, a seven-day retention policy, and a seven-day deletion lifecycle.
-
-Before any Cloud SQL deletion:
-
-- the final migration package must be present in the backup bucket;
-- its checksum manifest must have passed locally;
-- the source and target public-table counts must match;
-- the exact migration dump must have completed a disposable restore; and
-- stored credentials must have been exercised through approved n8n login/read-only MCP acceptance using the unchanged encryption key.
-
-The daily target is RPO 24 hours and RTO four hours. `restore-rehearsal.sh` proves the pinned PostgreSQL image can dump and restore fixture data without production secrets.
-
-For disaster recovery, download one complete `daily/<timestamp>` prefix to a root-only directory, then run `restore-backup.sh` with `BACKUP_DIR` and the typed `restore-daily-abpiv-n8n` confirmation. The script verifies checksums and archive paths, creates a local pre-restore rollback package, restores PostgreSQL/state/binary data, and leaves n8n stopped behind maintenance mode for acceptance.
-
-## Cutover and rollback
-
-The migration must be green before minute 45 and the whole automated window must finish within 60 minutes. DNS is marked attempted before apply, so a zero-, one-, or two-record partial failure enters a fail-closed rollback. After restore, n8n is first booted and its credentials are decrypted behind maintenance. A read-only precommit Nginx state then allows form inspection while denying form submissions and every webhook write. The old origin remains the rollback target until these sealed checks pass; only then is the target marked canonical and write ingress opened. After that boundary, failures recover the target and never re-expose stale Cloud SQL. No legacy destruction is part of either recovery path.
-
-Acceptance must confirm:
-
-- source and target workflow, credential, execution, and all public-table counts match;
-- binary archive checksums match;
-- forms paths load while editor/API paths remain blocked on the forms hostname;
-- automated editor Access redirection and stored-credential decryption pass, followed by Allan's manual n8n login and read-only MCP initialization/tool inventory;
-- no workflow execution or form submission is performed without its own approval; and
-- memory is below 75%, CPU below 70% of the live machine's sustained reserved-core entitlement (1 vCPU for `e2-custom-medium-6144`, 2 vCPU for `e2-standard-2`), sustained swap remains negligible (below 64 MiB), and both active Docker projects have no unhealthy container, OOM, or restart loop during the initial 15-minute observation.
-
-If the initial VM misses a threshold, the approved cutover automation stops both projects safely, resizes the VM in place to `e2-standard-2`, restores their prior modes, and repeats acceptance and observation before destruction can be considered.
-
-After cutover, request an approved in-place resize to `e2-standard-2` when any trigger occurs:
-
-- memory above 80% for 15 minutes;
-- any OOM termination or repeated container restart;
-- swap above 256 MiB for five minutes; or
-- CPU above 80% for 15 minutes or material request latency.
+- The data disk UUID must match `/etc/abpiv-n8n/data-disk.uuid`; boot-disk fallback is rejected.
+- Docker's `DOCKER-USER` chain blocks containers from the GCE metadata endpoint. Docker startup reapplies the rule.
+- The backend network is internal. Only Nginx joins the dedicated ingress bridge and publishes one loopback mapping.
+- Images are pinned by immutable digest, logs are bounded, containers use `no-new-privileges`, and secret values are excluded from persistent Docker metadata.
+- Deployment preserves runtime mode; it never silently activates a stopped or maintenance runtime.
