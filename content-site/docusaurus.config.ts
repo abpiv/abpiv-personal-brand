@@ -8,6 +8,7 @@ import { links } from './links';
 const isProduction = process.env.NODE_ENV === 'production';
 const siteUrl = process.env.SITE_URL || 'https://allanbpediniv.com';
 const plausibleSiteDomain = process.env.PLAUSIBLE_SITE_DOMAIN || new URL(siteUrl).hostname;
+const openpanelClientId = process.env.OPENPANEL_CLIENT_ID || '';
 
 interface ContentPostMetadata {
   metadata: {
@@ -120,11 +121,15 @@ const config: Config = {
 
   customFields: {
     insightPosts,
+    openpanelClientId,
   },
 
-  clientModules: ['./src/clientModules/mobileSidebarFallback.js'],
+  clientModules: [
+    './src/clientModules/mobileSidebarFallback.js',
+    './src/clientModules/openpanel.ts',
+  ],
 
-  headTags: isProduction
+  headTags: isProduction && !openpanelClientId
     ? [
         {
           tagName: 'script',
@@ -135,7 +140,7 @@ const config: Config = {
       ]
     : [],
 
-  scripts: isProduction
+  scripts: isProduction && !openpanelClientId
     ? [
         {
           src: '/_analytics/js/script.js',

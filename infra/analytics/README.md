@@ -2,6 +2,11 @@
 
 This directory contains operator documentation and configuration examples for the shared Plausible Community Edition analytics stack.
 
+The collection Worker also supports the personal OpenPanel gateway through
+`/_analytics/openpanel/track`. See the [website OpenPanel setup](../../content-site/OPENPANEL.md)
+for its activation sequence and checks. Existing Plausible routes and infrastructure
+remain intact.
+
 ## Architecture
 
 - Plausible CE dashboard: `https://analytics.lobst3rs.com`
