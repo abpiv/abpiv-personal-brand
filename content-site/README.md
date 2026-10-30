@@ -4,6 +4,9 @@
 
 This is a Docusaurus v3 (TypeScript) personal brand site located in `content-site/`. It serves as a hub for showcasing work across multiple content sections.
 
+For the optional OpenPanel integration, environment configuration, and activation
+checks, see [OPENPANEL.md](OPENPANEL.md).
+
 ---
 
 ## Architecture

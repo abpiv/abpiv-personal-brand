@@ -2,7 +2,7 @@ name: Content Site
 
 on:
   pull_request:
-    branches: [main]
+    branches: [preview, main]
     paths:
       - 'content-site/**'
       - '.github/workflows/deploy.yml'
@@ -81,6 +81,7 @@ jobs:
       CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT || 'abpiv-personal-brand' }}
       SITE_URL: https://content-site.lobst3rs.com
       PLAUSIBLE_SITE_DOMAIN: content-site.lobst3rs.com
+      OPENPANEL_CLIENT_ID: ${{ vars.OPENPANEL_CLIENT_ID }}
       DEPLOY_BRANCH: preview
     steps:
       - name: Checkout
@@ -160,6 +161,7 @@ jobs:
       CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT || 'abpiv-personal-brand' }}
       SITE_URL: https://${{ vars.PRODUCTION_DOMAIN || 'allanbpediniv.com' }}
       PLAUSIBLE_SITE_DOMAIN: ${{ vars.PLAUSIBLE_SITE_DOMAIN || vars.PRODUCTION_DOMAIN || 'allanbpediniv.com' }}
+      OPENPANEL_CLIENT_ID: ${{ vars.OPENPANEL_CLIENT_ID }}
       DEPLOY_BRANCH: main
     steps:
       - name: Checkout
