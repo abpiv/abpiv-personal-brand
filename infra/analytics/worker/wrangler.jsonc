@@ -10,5 +10,15 @@
   },
   "vars": {
     "PLAUSIBLE_ORIGIN_HOSTNAME": "analytics.lobst3rs.com"
+  },
+  "env": {
+    "preview": {
+      "name": "analytics-proxy-preview",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        "PLAUSIBLE_ORIGIN_HOSTNAME": "analytics.lobst3rs.com"
+      }
+    }
   }
 }
