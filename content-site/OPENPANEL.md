@@ -32,15 +32,19 @@ integration remains active. With it, only OpenPanel is initialized.
    only the OpenPanel router. Keep secrets and read credentials out of the browser.
 4. Run **Analytics Proxy** on `preview` with `target=preview` and
    `confirm_deploy=deploy`. This publishes `analytics-proxy-preview` at the
-   declared preview collection route without changing the production Worker.
+   preview collection route without changing the production Worker.
    After validation and normal preview-to-main promotion, run it on `main` with
    `target=production` and approve GitHub's production environment review.
    Production publication retains its existing Plausible variables and secrets.
    Neither deployment applies OpenTofu, changes DNS, or modifies either database.
 5. Confirm `allanbpediniv.com/_analytics/*` points to `analytics-proxy`, and
    `content-site.lobst3rs.com/_analytics/*` points to `analytics-proxy-preview`.
-   The production route is also represented in the existing analytics OpenTofu
-   configuration; the additional preview route is owned by the Worker configuration.
+   The production route is represented in the existing analytics OpenTofu
+   configuration. The preview route is set through the existing authorized
+   Cloudflare operator connection in the `lobst3rs.com` zone. Route management is
+   separate from CI: the existing analytics deploy token can publish code but
+   cannot manage routes in the preview zone. Wrangler intentionally omits routes
+   and preserves their existing assignments; do not broaden the CI token.
 6. Set environment-scoped `OPENPANEL_CLIENT_ID` variables and deploy the content
    site through **Content Site**, preview first and production after validation.
 7. Verify a fresh visit, an internal navigation, and an outbound-link click arrive

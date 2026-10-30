@@ -4,9 +4,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-05-26",
   "compatibility_flags": ["nodejs_compat"],
-  "routes": [
-    {"pattern": "allanbpediniv.com/_analytics/*", "zone_name": "allanbpediniv.com"}
-  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -17,9 +14,6 @@
   "env": {
     "preview": {
       "name": "analytics-proxy-preview",
-      "routes": [
-        {"pattern": "content-site.lobst3rs.com/_analytics/*", "zone_name": "lobst3rs.com"}
-      ],
       "workers_dev": false,
       "preview_urls": false,
       "vars": {
