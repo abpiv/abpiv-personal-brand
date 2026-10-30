@@ -13,6 +13,12 @@ on:
       - '.github/workflows/analytics-proxy.yml'
   workflow_dispatch:
     inputs:
+      target:
+        description: Deployment environment.
+        required: true
+        type: choice
+        options: [preview, production]
+        default: preview
       confirm_deploy:
         description: Type deploy to publish only the analytics collection Worker.
         required: true
@@ -47,11 +53,12 @@ jobs:
   deploy:
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/main' &&
+      ((github.ref == 'refs/heads/main' && inputs.target == 'production') ||
+       (github.ref == 'refs/heads/preview' && inputs.target == 'preview')) &&
       inputs.confirm_deploy == 'deploy'
     needs: validate
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.target }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,4 +73,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_ANALYTICS_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: infra/analytics/worker
-          command: deploy --keep-vars
+          command: deploy --keep-vars ${{ inputs.target == 'preview' && '--env preview' || '' }}

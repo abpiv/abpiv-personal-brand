@@ -30,13 +30,17 @@ integration remains active. With it, only OpenPanel is initialized.
 3. Add those exact origins and write-client IDs to the gateway's existing
    `origins.conf` and `clients.conf`, preserving existing entries. Validate and reload
    only the OpenPanel router. Keep secrets and read credentials out of the browser.
-4. After normal preview-to-main promotion, manually run **Analytics Proxy** on
-   `main` with `confirm_deploy=deploy`. This publishes only the existing Worker,
-   retaining its Plausible variables and secrets. It does not apply OpenTofu or
-   change DNS, routes, or either analytics database.
-5. Confirm the preview hostname has an `/_analytics/*` route to `analytics-proxy`
-   before enabling preview collection. The October 30 read found only the production
-   route; preview routing still needs configuration in the owning Cloudflare setup.
+4. Run **Analytics Proxy** on `preview` with `target=preview` and
+   `confirm_deploy=deploy`. This publishes `analytics-proxy-preview` at the
+   declared preview collection route without changing the production Worker.
+   After validation and normal preview-to-main promotion, run it on `main` with
+   `target=production` and approve GitHub's production environment review.
+   Production publication retains its existing Plausible variables and secrets.
+   Neither deployment applies OpenTofu, changes DNS, or modifies either database.
+5. Confirm `allanbpediniv.com/_analytics/*` points to `analytics-proxy`, and
+   `content-site.lobst3rs.com/_analytics/*` points to `analytics-proxy-preview`.
+   The production route is also represented in the existing analytics OpenTofu
+   configuration; the additional preview route is owned by the Worker configuration.
 6. Set environment-scoped `OPENPANEL_CLIENT_ID` variables and deploy the content
    site through **Content Site**, preview first and production after validation.
 7. Verify a fresh visit, an internal navigation, and an outbound-link click arrive
@@ -59,9 +63,16 @@ the analytics Worker's typecheck, build, and tests, and ensure `dist/index.js`
 matches the generated output. The proxy tests cover successful collection,
 authentication isolation, blocked operations, body limits, and upstream failures.
 
-The storage repair discovered on October 30, 2026 is owned by a separate agent.
-Live activation and event acceptance must wait for that repair; these source
-changes do not modify the shared disk or Obsidian backups.
+The storage repair discovered on October 30, 2026 was completed by a separate
+agent. Fresh checks confirmed all nine OpenPanel components healthy, about 28 GB
+free, and collection enabled. Website activation does not modify the shared disk
+or Obsidian backups.
+
+The `ABPIV` organization now has separate `personal-website` and
+`personal-website-preview` projects, with exact production/preview origins and
+write-client IDs in the collection gateway allowlists. Browser clients contain
+only the public write ID; their associated secrets remain in native credential
+storage. Live website event acceptance is recorded after deployment.
 
 Local validation on October 30 passed: site typecheck and production build,
 homepage-insights check, and all 12 Worker tests. A real-browser check against a
